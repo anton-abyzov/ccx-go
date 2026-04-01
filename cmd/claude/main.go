@@ -108,18 +108,27 @@ func runQuery(cmd *cobra.Command, args []string) error {
 			model = "nvidia/nemotron-3-super-120b-a12b:free"
 		}
 	default:
-		auth, err := config.ResolveAuth()
+		vertexCfg, err := config.ResolveVertex()
 		if err != nil {
 			return fmt.Errorf("%w", err)
 		}
-		anthropicClient := api.NewClient(auth.Key)
-		if auth.IsOAuth {
-			anthropicClient.WithOAuth(true)
-		}
-		client = anthropicClient
-		authDisplay = auth.Display
-		if auth.Email != "" {
-			authDisplay = auth.Display + " (" + auth.Email + ")"
+		if vertexCfg != nil {
+			client = api.NewClient(vertexCfg.Token).WithVertex(vertexCfg.Region, vertexCfg.ProjectID)
+			authDisplay = fmt.Sprintf("Vertex AI (%s)", vertexCfg.Region)
+		} else {
+			auth, err := config.ResolveAuth()
+			if err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			anthropicClient := api.NewClient(auth.Key)
+			if auth.IsOAuth {
+				anthropicClient.WithOAuth(true)
+			}
+			client = anthropicClient
+			authDisplay = auth.Display
+			if auth.Email != "" {
+				authDisplay = auth.Display + " (" + auth.Email + ")"
+			}
 		}
 	}
 

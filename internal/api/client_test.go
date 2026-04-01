@@ -246,6 +246,101 @@ func TestClient_SetHeaders_OAuth(t *testing.T) {
 	})
 }
 
+func TestClient_WithVertex(t *testing.T) {
+	c := NewClient("gcp-token").WithVertex("us-east5", "my-project")
+	assert.NotNil(t, c.vertex)
+	assert.Equal(t, "us-east5", c.vertex.Region)
+	assert.Equal(t, "my-project", c.vertex.ProjectID)
+}
+
+func TestClient_BuildURL_Standard(t *testing.T) {
+	c := NewClient("key")
+	assert.Equal(t, "https://api.anthropic.com/v1/messages", c.buildURL("claude-sonnet-4-20250514", false))
+	assert.Equal(t, "https://api.anthropic.com/v1/messages", c.buildURL("claude-sonnet-4-20250514", true))
+}
+
+func TestClient_BuildURL_Vertex(t *testing.T) {
+	c := NewClient("token").WithVertex("us-east5", "my-project")
+
+	got := c.buildURL("claude-sonnet-4-20250514", false)
+	assert.Equal(t, "https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict", got)
+
+	got = c.buildURL("claude-sonnet-4-20250514", true)
+	assert.Equal(t, "https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict", got)
+}
+
+func TestToVertexModelID(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"claude-sonnet-4-20250514", "claude-sonnet-4@20250514"},
+		{"claude-opus-4-20250514", "claude-opus-4@20250514"},
+		{"claude-haiku-4-5-20251001", "claude-haiku-4-5@20251001"},
+		{"claude-3-5-sonnet-20241022", "claude-3-5-sonnet@20241022"},
+		// Already Vertex format
+		{"claude-sonnet-4@20250514", "claude-sonnet-4@20250514"},
+		// Alias without date
+		{"claude-sonnet-4", "claude-sonnet-4"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.want, ToVertexModelID(tt.input))
+		})
+	}
+}
+
+func TestClient_MarshalRequest_Standard(t *testing.T) {
+	c := NewClient("key")
+	req := &Request{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: 1024,
+		Messages:  []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("Hi")}}},
+		Stream:    true,
+	}
+	body, err := c.marshalRequest(req)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(body, &parsed))
+	assert.Equal(t, "claude-sonnet-4-20250514", parsed["model"])
+	assert.NotContains(t, parsed, "anthropic_version")
+}
+
+func TestClient_MarshalRequest_Vertex(t *testing.T) {
+	c := NewClient("token").WithVertex("us-east5", "my-project")
+	req := &Request{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: 1024,
+		Messages:  []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("Hi")}}},
+		System:    "Be helpful",
+		Stream:    true,
+	}
+	body, err := c.marshalRequest(req)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(body, &parsed))
+	// Vertex format: has anthropic_version (vertex-specific), no model
+	assert.Equal(t, vertexVersion, parsed["anthropic_version"])
+	assert.NotContains(t, parsed, "model")
+	assert.Equal(t, true, parsed["stream"])
+	assert.Equal(t, "Be helpful", parsed["system"])
+	assert.Equal(t, float64(1024), parsed["max_tokens"])
+}
+
+func TestClient_SetHeaders_Vertex(t *testing.T) {
+	c := NewClient("gcp-token").WithVertex("us-east5", "my-project")
+	req, _ := http.NewRequest("POST", "http://example.com", nil)
+	c.setHeaders(req)
+
+	assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
+	assert.Equal(t, "Bearer gcp-token", req.Header.Get("Authorization"))
+	// Vertex should NOT send Anthropic-Version header or X-API-Key
+	assert.Empty(t, req.Header.Get("Anthropic-Version"))
+	assert.Empty(t, req.Header.Get("X-API-Key"))
+	assert.Empty(t, req.Header.Get("anthropic-beta"))
+}
+
 func TestAPIError(t *testing.T) {
 	err := &APIError{StatusCode: 429, Type: "rate_limit_error", Message: "too many requests"}
 	assert.Contains(t, err.Error(), "429")
