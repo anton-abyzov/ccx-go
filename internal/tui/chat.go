@@ -28,7 +28,7 @@ func RenderMessage(msg ChatMessage, width int) string {
 		b.WriteString(rendered)
 
 	case "tool":
-		header := toolNameStyle.Render(fmt.Sprintf("⚙ %s", msg.ToolID))
+		header := fmt.Sprintf("%s %s", toolDotStyle.Render("●"), toolBoldStyle.Render(msg.ToolID))
 		b.WriteString(header)
 		b.WriteString("\n")
 		if msg.Content != "" {

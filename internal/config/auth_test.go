@@ -9,37 +9,43 @@ import (
 func TestParseOAuthJSON_Valid(t *testing.T) {
 	raw := `{
 		"claudeAiOauth": {"accessToken": "tok_abc123"},
-		"claudeAiSubscriptionType": "max"
+		"claudeAiSubscriptionType": "max",
+		"email": "user@example.com"
 	}`
-	token, subType := parseOAuthJSON(raw)
+	token, subType, email := parseOAuthJSON(raw)
 	assert.Equal(t, "tok_abc123", token)
 	assert.Equal(t, "Max", subType)
+	assert.Equal(t, "user@example.com", email)
 }
 
 func TestParseOAuthJSON_ProDefault(t *testing.T) {
 	raw := `{"claudeAiOauth": {"accessToken": "tok_xyz"}}`
-	token, subType := parseOAuthJSON(raw)
+	token, subType, email := parseOAuthJSON(raw)
 	assert.Equal(t, "tok_xyz", token)
 	assert.Equal(t, "Pro", subType)
+	assert.Empty(t, email)
 }
 
 func TestParseOAuthJSON_NoToken(t *testing.T) {
 	raw := `{"claudeAiOauth": {}}`
-	token, subType := parseOAuthJSON(raw)
+	token, subType, email := parseOAuthJSON(raw)
 	assert.Empty(t, token)
 	assert.Empty(t, subType)
+	assert.Empty(t, email)
 }
 
 func TestParseOAuthJSON_InvalidJSON(t *testing.T) {
-	token, subType := parseOAuthJSON("not json")
+	token, subType, email := parseOAuthJSON("not json")
 	assert.Empty(t, token)
 	assert.Empty(t, subType)
+	assert.Empty(t, email)
 }
 
 func TestParseOAuthJSON_EmptyString(t *testing.T) {
-	token, subType := parseOAuthJSON("")
+	token, subType, email := parseOAuthJSON("")
 	assert.Empty(t, token)
 	assert.Empty(t, subType)
+	assert.Empty(t, email)
 }
 
 func TestResolveAuth_EnvVar(t *testing.T) {

@@ -21,7 +21,7 @@ type RunFunc func(ctx context.Context, prompt, model, system string, registry *t
 
 // Tool spawns a sub-agent with its own query loop.
 type Tool struct {
-	client   *api.Client
+	client   api.MessageClient
 	registry *tool.Registry
 	model    string
 	system   string
@@ -29,7 +29,7 @@ type Tool struct {
 
 // New creates a new Agent tool. The client, registry, model, and system prompt
 // are shared with the parent so the sub-agent can call tools and talk to Claude.
-func New(client *api.Client, registry *tool.Registry, model, system string) *Tool {
+func New(client api.MessageClient, registry *tool.Registry, model, system string) *Tool {
 	return &Tool{
 		client:   client,
 		registry: registry,
@@ -91,7 +91,7 @@ func (t *Tool) runSubAgent(ctx context.Context, prompt string) (string, error) {
 		},
 	}
 
-	const maxTurns = 10
+	const maxTurns = 100
 	var collectedText strings.Builder
 
 	for turn := 0; turn < maxTurns; turn++ {

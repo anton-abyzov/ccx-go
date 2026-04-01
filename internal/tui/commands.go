@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/anton-abyzov/ccx-go/internal/config"
 	"github.com/anton-abyzov/ccx-go/internal/cost"
 	"github.com/anton-abyzov/ccx-go/internal/tool"
 )
@@ -51,6 +52,11 @@ func HandleSlashCommand(input string, ctx CommandContext) *CommandResult {
 		return &CommandResult{Output: fmt.Sprintf("ccx-go v%s", ctx.Version)}
 	case "/tools":
 		return &CommandResult{Output: toolsOutput(ctx.Registry)}
+	case "/login":
+		if err := config.RunOAuthLogin(); err != nil {
+			return &CommandResult{Output: fmt.Sprintf("Login failed: %v", err)}
+		}
+		return &CommandResult{Output: ""}
 	default:
 		return nil // not a built-in command; may be a skill
 	}
@@ -59,6 +65,7 @@ func HandleSlashCommand(input string, ctx CommandContext) *CommandResult {
 func commandList() string {
 	return `Available commands:
   /help     Show available commands and shortcuts
+  /login    Log in to Claude via OAuth
   /exit     Quit the session
   /clear    Clear the screen
   /cost     Show token usage and cost for this session
@@ -73,6 +80,7 @@ func helpText() string {
 
 Commands:
   /help     Show this help
+  /login    Log in to Claude via OAuth
   /exit     Quit the session
   /clear    Clear the screen
   /cost     Show token usage and cost

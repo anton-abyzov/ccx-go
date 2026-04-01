@@ -47,11 +47,15 @@ func main() {
 	}
 
 	rootCmd.Flags().StringP("model", "m", "claude-sonnet-4-20250514", "model to use")
-	rootCmd.Flags().Int("max-turns", 0, "maximum conversation turns (0 = unlimited)")
+	rootCmd.Flags().Int("max-turns", 200, "maximum conversation turns")
 	rootCmd.Flags().Int("max-tokens", 16384, "maximum tokens per response")
 	rootCmd.Flags().Bool("no-stream", false, "disable streaming output")
 	rootCmd.Flags().StringP("system", "s", "", "additional system prompt")
 	rootCmd.Flags().Bool("tui", false, "use full-screen Bubbletea TUI (default: inline)")
+	rootCmd.Flags().Bool("dangerously-skip-permissions", true, "skip all permission prompts (default)")
+	rootCmd.Flags().String("permission-mode", "bypass", "permission mode: default, acceptEdits, bypass, plan")
+	rootCmd.Flags().String("provider", "anthropic", "API provider: anthropic, openrouter")
+	rootCmd.Flags().String("openrouter-key", "", "OpenRouter API key (env: OPENROUTER_API_KEY)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -59,11 +63,13 @@ func main() {
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
+	provider, _ := cmd.Flags().GetString("provider")
 	model, _ := cmd.Flags().GetString("model")
 	maxTurns, _ := cmd.Flags().GetInt("max-turns")
 	maxTokens, _ := cmd.Flags().GetInt("max-tokens")
 	extraSystem, _ := cmd.Flags().GetString("system")
 	useTUI, _ := cmd.Flags().GetBool("tui")
+	openrouterKey, _ := cmd.Flags().GetString("openrouter-key")
 
 	// Load configuration
 	settings, _ := config.LoadSettings(config.DefaultSettingsPath())
@@ -84,27 +90,46 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	// Initialize cost tracker
 	tracker := cost.NewTracker()
 
-	// Resolve authentication: Vertex AI or standard (env var → Keychain → credentials)
-	var client *api.Client
+	// Set up client based on provider
+	var client api.MessageClient
 	var authDisplay string
 
-	vertexCfg, err := config.ResolveVertex()
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-	if vertexCfg != nil {
-		client = api.NewClient(vertexCfg.Token).WithVertex(vertexCfg.Region, vertexCfg.ProjectID)
-		authDisplay = fmt.Sprintf("Vertex AI (%s)", vertexCfg.Region)
-	} else {
-		auth, err := config.ResolveAuth()
+	switch provider {
+	case "openrouter":
+		if openrouterKey == "" {
+			openrouterKey = os.Getenv("OPENROUTER_API_KEY")
+		}
+		if openrouterKey == "" {
+			return fmt.Errorf("OpenRouter requires --openrouter-key or OPENROUTER_API_KEY env var")
+		}
+		client = api.NewOpenAIClient(openrouterKey)
+		authDisplay = "OpenRouter"
+		if !cmd.Flags().Changed("model") {
+			model = "nvidia/nemotron-3-super-120b-a12b:free"
+		}
+	default:
+		vertexCfg, err := config.ResolveVertex()
 		if err != nil {
 			return fmt.Errorf("%w", err)
 		}
-		client = api.NewClient(auth.Key)
-		if auth.IsOAuth {
-			client.WithOAuth(true)
+		if vertexCfg != nil {
+			client = api.NewClient(vertexCfg.Token).WithVertex(vertexCfg.Region, vertexCfg.ProjectID)
+			authDisplay = fmt.Sprintf("Vertex AI (%s)", vertexCfg.Region)
+		} else {
+			auth, err := config.ResolveAuth()
+			if err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			anthropicClient := api.NewClient(auth.Key)
+			if auth.IsOAuth {
+				anthropicClient.WithOAuth(true)
+			}
+			client = anthropicClient
+			authDisplay = auth.Display
+			if auth.Email != "" {
+				authDisplay = auth.Display + " (" + auth.Email + ")"
+			}
 		}
-		authDisplay = auth.Display
 	}
 
 	registry := registerTools(cwd, client, model)
@@ -157,7 +182,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 }
 
 // runInline runs the Claude Code-style inline chat (default for TTY).
-func runInline(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model, authDisplay string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+func runInline(parentCtx context.Context, client api.MessageClient, registry *tool.Registry, cwd, model, authDisplay string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -214,14 +239,17 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 	}
 
 	// sendAndRender handles showing working indicator, calling the API, and rendering the result.
-	sendAndRender := func(input string) {
-		tui.RenderUserMessageInline(input)
+	// apiInput is sent to the model; displayText is shown to the user (if non-empty).
+	sendAndRender := func(apiInput, displayText string) {
+		if displayText != "" {
+			tui.RenderUserMessageInline(displayText)
+		}
 		streaming = false
 		working = true
 		streamBuf.Reset()
 		tui.RenderWorkingInline()
 
-		if err := loop.SendMessage(ctx, input); err != nil {
+		if err := loop.SendMessage(ctx, apiInput); err != nil {
 			if working {
 				tui.RenderWorkingClearInline()
 				working = false
@@ -242,7 +270,8 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 
 	// Handle initial prompt from args
 	if len(args) > 0 {
-		sendAndRender(strings.Join(args, " "))
+		initialPrompt := strings.Join(args, " ")
+		sendAndRender(initialPrompt, initialPrompt)
 	}
 
 	// Discover skills for tab completion and invocation
@@ -261,6 +290,8 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		if err != nil {
 			break // Ctrl+C or Ctrl+D
 		}
+		// Clear liner's plain-text echo so only the styled version shows
+		fmt.Print("\033[A\033[2K\r")
 		input = strings.TrimSpace(input)
 		if input == "" {
 			continue
@@ -271,6 +302,7 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		if strings.HasPrefix(input, "/") {
 			result := tui.HandleSlashCommand(input, cmdCtx)
 			if result != nil {
+				tui.RenderUserMessageInline(input)
 				if result.Quit {
 					break
 				}
@@ -296,17 +328,18 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 				if skillArgs != "" {
 					skillPrompt += fmt.Sprintf("\n\nUser request: %s", skillArgs)
 				}
-				sendAndRender(skillPrompt)
+				sendAndRender(skillPrompt, input)
 				continue
 			}
 
 			// Unknown command
+			tui.RenderUserMessageInline(input)
 			tui.RenderCommandOutputInline(fmt.Sprintf("Unknown command: %s\nType / for available commands.", parts[0]))
 			fmt.Println()
 			continue
 		}
 
-		sendAndRender(input)
+		sendAndRender(input, input)
 	}
 
 	fmt.Fprintf(os.Stderr, "\n--- session: %s ---\n", tracker.Summary())
@@ -314,7 +347,7 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 }
 
 // runFullscreenTUI runs the original Bubbletea full-screen mode (--tui flag).
-func runFullscreenTUI(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+func runFullscreenTUI(parentCtx context.Context, client api.MessageClient, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
@@ -380,7 +413,7 @@ func runFullscreenTUI(parentCtx context.Context, client *api.Client, registry *t
 	return err
 }
 
-func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Registry, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+func runPipe(parentCtx context.Context, client api.MessageClient, registry *tool.Registry, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	prompt := ""
 	if len(args) > 0 {
 		prompt = strings.Join(args, " ")
@@ -449,7 +482,7 @@ func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Regis
 	return err
 }
 
-func registerTools(cwd string, client *api.Client, model string) *tool.Registry {
+func registerTools(cwd string, client api.MessageClient, model string) *tool.Registry {
 	registry := tool.NewRegistry()
 
 	agentSystem := "You are a sub-agent. Complete the given task using available tools, then return a concise summary."

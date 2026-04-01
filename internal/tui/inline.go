@@ -99,7 +99,8 @@ func RenderWelcomeInline(version, model, cwd, authDisplay string, toolCount int)
 		leftLines = append(leftLines, line)
 	}
 	leftLines = append(leftLines, "")
-	leftLines = append(leftLines, welcomeGreenStyle.Render(modelShort)+" · "+authDisplay)
+	authLine := welcomeGreenStyle.Render(modelShort) + " · " + authDisplay
+	leftLines = append(leftLines, authLine)
 	leftLines = append(leftLines, welcomeDim.Render(shortCwd))
 	leftLines = append(leftLines, welcomeDim.Render(fmt.Sprintf("%d tools available", toolCount)))
 

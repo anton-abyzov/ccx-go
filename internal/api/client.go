@@ -28,6 +28,18 @@ type VertexConfig struct {
 	ProjectID string
 }
 
+// Streamer reads events from a streaming API response.
+type Streamer interface {
+	Next() (*StreamEvent, error)
+	Close() error
+}
+
+// MessageClient is the interface for API message providers (Anthropic, OpenAI-compatible, etc).
+type MessageClient interface {
+	CreateMessage(ctx context.Context, req *Request) (*Response, error)
+	CreateMessageStream(ctx context.Context, req *Request) (Streamer, error)
+}
+
 // Client is an HTTP client for the Anthropic Messages API.
 type Client struct {
 	apiKey     string
@@ -130,7 +142,7 @@ func (c *Client) CreateMessage(ctx context.Context, req *Request) (*Response, er
 }
 
 // CreateMessageStream sends a streaming message request with automatic retries.
-func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*StreamReader, error) {
+func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (Streamer, error) {
 	req.Stream = true
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens

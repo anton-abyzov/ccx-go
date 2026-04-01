@@ -33,7 +33,7 @@ type LoopConfig struct {
 
 // Loop implements the core agentic query loop.
 type Loop struct {
-	client   *api.Client
+	client   api.MessageClient
 	registry *tool.Registry
 	config   LoopConfig
 	// Messages is accessible for introspection (e.g., context compaction).
@@ -41,7 +41,7 @@ type Loop struct {
 }
 
 // NewLoop creates a new query loop.
-func NewLoop(client *api.Client, registry *tool.Registry, config LoopConfig) *Loop {
+func NewLoop(client api.MessageClient, registry *tool.Registry, config LoopConfig) *Loop {
 	if config.MaxTokens == 0 {
 		config.MaxTokens = 16384
 	}
