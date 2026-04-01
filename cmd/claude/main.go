@@ -59,12 +59,6 @@ func main() {
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
-	// Resolve authentication: env var → macOS Keychain → credentials file
-	auth, err := config.ResolveAuth()
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
 	model, _ := cmd.Flags().GetString("model")
 	maxTurns, _ := cmd.Flags().GetInt("max-turns")
 	maxTokens, _ := cmd.Flags().GetInt("max-tokens")
@@ -90,11 +84,29 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	// Initialize cost tracker
 	tracker := cost.NewTracker()
 
-	// Set up client and tools
-	client := api.NewClient(auth.Key)
-	if auth.IsOAuth {
-		client.WithOAuth(true)
+	// Resolve authentication: Vertex AI or standard (env var → Keychain → credentials)
+	var client *api.Client
+	var authDisplay string
+
+	vertexCfg, err := config.ResolveVertex()
+	if err != nil {
+		return fmt.Errorf("%w", err)
 	}
+	if vertexCfg != nil {
+		client = api.NewClient(vertexCfg.Token).WithVertex(vertexCfg.Region, vertexCfg.ProjectID)
+		authDisplay = fmt.Sprintf("Vertex AI (%s)", vertexCfg.Region)
+	} else {
+		auth, err := config.ResolveAuth()
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		client = api.NewClient(auth.Key)
+		if auth.IsOAuth {
+			client.WithOAuth(true)
+		}
+		authDisplay = auth.Display
+	}
+
 	registry := registerTools(cwd, client, model)
 
 	// Build CLAUDE.md content for system prompt
@@ -138,7 +150,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if useTUI {
 			return runFullscreenTUI(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 		}
-		return runInline(cmd.Context(), client, registry, cwd, model, auth.Display, maxTokens, maxTurns, systemPrompt, tracker, args)
+		return runInline(cmd.Context(), client, registry, cwd, model, authDisplay, maxTokens, maxTurns, systemPrompt, tracker, args)
 	}
 
 	return runPipe(cmd.Context(), client, registry, model, maxTokens, maxTurns, systemPrompt, tracker, args)

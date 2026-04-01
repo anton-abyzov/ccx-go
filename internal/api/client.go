@@ -8,17 +8,25 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	defaultBaseURL   = "https://api.anthropic.com"
-	defaultVersion   = "2023-06-01"
-	defaultMaxTokens = 16384
-	maxRetries       = 5
+	defaultBaseURL      = "https://api.anthropic.com"
+	defaultVersion      = "2023-06-01"
+	vertexVersion       = "vertex-2023-10-16"
+	defaultMaxTokens    = 16384
+	maxRetries          = 5
 )
+
+// VertexConfig holds Vertex AI endpoint configuration.
+type VertexConfig struct {
+	Region    string
+	ProjectID string
+}
 
 // Client is an HTTP client for the Anthropic Messages API.
 type Client struct {
@@ -26,6 +34,7 @@ type Client struct {
 	baseURL    string
 	version    string
 	useOAuth   bool
+	vertex     *VertexConfig
 	httpClient *http.Client
 }
 
@@ -46,6 +55,12 @@ func (c *Client) WithOAuth(enabled bool) *Client {
 	return c
 }
 
+// WithVertex configures the client to use Google Cloud Vertex AI.
+func (c *Client) WithVertex(region, projectID string) *Client {
+	c.vertex = &VertexConfig{Region: region, ProjectID: projectID}
+	return c
+}
+
 // WithBaseURL sets a custom base URL (useful for testing).
 func (c *Client) WithBaseURL(url string) *Client {
 	c.baseURL = url
@@ -59,10 +74,11 @@ func (c *Client) CreateMessage(ctx context.Context, req *Request) (*Response, er
 		req.MaxTokens = defaultMaxTokens
 	}
 
-	body, err := json.Marshal(req)
+	body, err := c.marshalRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
+	url := c.buildURL(req.Model, false)
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -75,7 +91,7 @@ func (c *Client) CreateMessage(ctx context.Context, req *Request) (*Response, er
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
@@ -120,10 +136,11 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Stream
 		req.MaxTokens = defaultMaxTokens
 	}
 
-	body, err := json.Marshal(req)
+	body, err := c.marshalRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
+	url := c.buildURL(req.Model, true)
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -136,7 +153,7 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Stream
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
@@ -168,15 +185,71 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Stream
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
+// buildURL returns the endpoint URL for the given model and streaming mode.
+func (c *Client) buildURL(model string, streaming bool) string {
+	if c.vertex != nil {
+		action := "rawPredict"
+		if streaming {
+			action = "streamRawPredict"
+		}
+		return fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/anthropic/models/%s:%s",
+			c.vertex.Region, c.vertex.ProjectID, c.vertex.Region, ToVertexModelID(model), action)
+	}
+	return c.baseURL + "/v1/messages"
+}
+
+// dateModelSuffix matches a trailing -YYYYMMDD date in Anthropic model IDs.
+var dateModelSuffix = regexp.MustCompile(`-(\d{8})$`)
+
+// ToVertexModelID converts an Anthropic-style model ID to Vertex AI format.
+// e.g. "claude-sonnet-4-20250514" → "claude-sonnet-4@20250514"
+// IDs already in Vertex format (with @) or without a date suffix are returned as-is.
+func ToVertexModelID(model string) string {
+	if strings.Contains(model, "@") {
+		return model
+	}
+	return dateModelSuffix.ReplaceAllString(model, "@$1")
+}
+
+// vertexRequest is the Vertex AI request format: no model field, anthropic_version in body.
+type vertexRequest struct {
+	AnthropicVersion string           `json:"anthropic_version"`
+	MaxTokens        int              `json:"max_tokens"`
+	Messages         []Message        `json:"messages"`
+	System           string           `json:"system,omitempty"`
+	Tools            []ToolDefinition `json:"tools,omitempty"`
+	Stream           bool             `json:"stream,omitempty"`
+}
+
+// marshalRequest serializes the request, using Vertex format when configured.
+func (c *Client) marshalRequest(req *Request) ([]byte, error) {
+	if c.vertex != nil {
+		vr := vertexRequest{
+			AnthropicVersion: vertexVersion,
+			MaxTokens:        req.MaxTokens,
+			Messages:         req.Messages,
+			System:           req.System,
+			Tools:            req.Tools,
+			Stream:           req.Stream,
+		}
+		return json.Marshal(vr)
+	}
+	return json.Marshal(req)
+}
+
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
-	if c.useOAuth {
+	if c.vertex != nil {
+		// Vertex AI: Bearer auth with GCP token, no Anthropic-Version header
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	} else if c.useOAuth {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+		req.Header.Set("Anthropic-Version", c.version)
 	} else {
 		req.Header.Set("X-API-Key", c.apiKey)
+		req.Header.Set("Anthropic-Version", c.version)
 	}
-	req.Header.Set("Anthropic-Version", c.version)
 }
 
 // APIError represents a structured error from the Anthropic API.
