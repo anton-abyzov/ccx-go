@@ -18,8 +18,8 @@ type input struct {
 	Type       string `json:"type,omitempty"`
 	OutputMode string `json:"output_mode,omitempty"`
 	Context    int    `json:"context,omitempty"`
-	Before     int    `json:"-A,omitempty"`
-	After      int    `json:"-B,omitempty"`
+	Before     int    `json:"-B,omitempty"`
+	After      int    `json:"-A,omitempty"`
 	Insensitive bool  `json:"-i,omitempty"`
 	Multiline  bool   `json:"multiline,omitempty"`
 	HeadLimit  int    `json:"head_limit,omitempty"`
