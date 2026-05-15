@@ -16,7 +16,7 @@ import (
 	"github.com/anton-abyzov/ccx-go/internal/prompt"
 	"github.com/anton-abyzov/ccx-go/internal/query"
 	"github.com/anton-abyzov/ccx-go/internal/skill"
-	"github.com/anton-abyzov/ccx-go/internal/tui"
+	"github.com/anton-abyzov/ccx-go/internal/tool"
 	agentTool "github.com/anton-abyzov/ccx-go/internal/tools/agent"
 	"github.com/anton-abyzov/ccx-go/internal/tools/bash"
 	"github.com/anton-abyzov/ccx-go/internal/tools/fileedit"
@@ -35,8 +35,8 @@ import (
 	"github.com/anton-abyzov/ccx-go/internal/tools/todowrite"
 	"github.com/anton-abyzov/ccx-go/internal/tools/webfetch"
 	"github.com/anton-abyzov/ccx-go/internal/tools/websearch"
+	"github.com/anton-abyzov/ccx-go/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/anton-abyzov/ccx-go/internal/tool"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -45,7 +45,7 @@ var version = "dev"
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:     "claude [prompt]",
+		Use:     "ccx-go [prompt]",
 		Short:   "AI coding assistant CLI",
 		Long:    "ccx-go — a Go implementation of an AI coding assistant powered by Claude.",
 		Version: version,
